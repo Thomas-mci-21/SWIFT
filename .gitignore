@@ -1,0 +1,63 @@
+# API keys and credentials
+common/shared_config.py
+.env*
+*.key
+*.pem
+
+# Model checkpoints and artifacts
+checkpoints/
+models/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Generated data and predictions
+data/**/generated*.csv
+data/**/train.csv
+data/**/test.csv
+data/**/critic/
+predictions/
+
+# Experiment logs
+logs/
+
+# Archive (old versions)
+archive/
+
+# Server-specific
+clash/
+
+# Paper (managed via Overleaf)
+paper/
+
+# Overleaf tools (project-specific)
+tools/
+
+# Internal docs (server paths, experiment plans)
+docs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+.pytest_cache/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sync scripts (project-specific)
+sync.sh
+start_auto_sync.sh
+auto_sync.sh

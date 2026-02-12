@@ -1,0 +1,234 @@
+claim_id,claim,label
+fa_0,The United States has the highest number of nuclear power plants in the world,True
+fa_1,The United States has 94 operating reactors,False
+fa_2,France has a significant number of nuclear power plants,True
+fa_3,China has a significant number of nuclear power plants,True
+fa_4,Russia has a significant number of nuclear power plants,True
+fa_5,South Korea has a significant number of nuclear power plants,True
+fa_6,Jack Dorsey is the CEO of Twitter,False
+fa_7,Jack Dorsey co-founded Twitter in 2006,True
+fa_8,Jack Dorsey served as the CEO of Twitter until 2008,False
+fa_9,Jack Dorsey returned as CEO of Twitter in 2015,True
+fa_10,Jack Dorsey is the CEO and co-founder of Square,True
+fa_11,Time magazine recognized Jack Dorsey as one of the 100 most influential people in the world,True
+fa_12,Wall Street Journal awarded Jack Dorsey the Innovator of the Year Award,True
+fa_13,Jupiter is less dense than Saturn,False
+fa_14,Jupiter has a density of 1.33 grams per cubic centimeter,True
+fa_15,Saturn has a density of 0.69 grams per cubic centimeter,False
+fa_16,Jupiter is mostly made up of gas,True
+fa_17,Saturn has a larger proportion of solid materials in its composition,False
+fa_18,Eise Eisinga was a Dutch mathematician,True
+fa_19,Eise Eisinga was an astronomer,True
+fa_20,"Eise Eisinga built an orrery in his house in Franeker, Netherlands",True
+fa_21,Little is known about Eise Eisinga's family life,False
+fa_22,There is no record of how many sons Eise Eisinga had,False
+fa_23,I cannot provide a specific answer to this question,True
+fa_24,Argentina have won the FIFA World Cup two times,False
+fa_25,Argentina won the World Cup for the first time in 1978,True
+fa_26,Argentina hosted the tournament in 1978,True
+fa_27,Argentina won the World Cup again in 1986,True
+fa_28,Argentina won the World Cup in Mexico in 1986,True
+fa_29,Both victories were led by Diego Maradona,False
+fa_30,Argentina has not won the World Cup since 1986,False
+fa_31,Argentina made it to the final in 1990,True
+fa_32,Argentina made it to the semi-finals in 2010,False
+fa_33,Argentina made it to the semi-finals in 2014,True
+fa_34,The peregrine falcon is the fastest animal with wings and fur,False
+fa_35,The peregrine falcon can reach speeds of over 240 miles per hour,True
+fa_36,The peregrine falcon can reach speeds of over 386 kilometers per hour,True
+fa_37,The peregrine falcon dives to catch prey,True
+fa_38,There have been four female US Supreme Court justices,False
+fa_39,Sandra Day O'Connor is a female US Supreme Court justice,False
+fa_40,Ruth Bader Ginsburg is a female US Supreme Court justice,False
+fa_41,Sonia Sotomayor is a female US Supreme Court justice,True
+fa_42,Elena Kagan is a female US Supreme Court justice,True
+fa_43,Fortune cookies originated in Japan in the 19th century.,False
+fa_44,The modern-day version of fortune cookies was invented in the United States.,True
+fa_45,Fortune cookies made their way to San Francisco in the late 1800s and early 1900s through Japanese immigrants.,True
+fa_46,Fortune cookies were first served in Japanese tea shops.,False
+fa_47,Fortune cookies gained popularity in the Chinese-American community during the 20th century.,True
+fa_48,Fortune cookies became a staple in Chinese restaurants across the United States.,True
+fa_49,Fortune cookies are not a traditional Chinese invention.,True
+fa_50,Fortune cookies were created in America.,True
+fa_51,Fortune cookies are enjoyed by people all over the world.,False
+fa_52,Fortune cookies can often be found in Chinese and Asian restaurants.,True
+fa_53,Fortune cookies can often be found in many grocery stores and specialty shops.,True
+fa_54,"The most valuable NFT ever sold is a digital artwork called ""Everydays: The First 5000 Days""",False
+fa_55,"""Everydays: The First 5000 Days"" was created by the artist Beeple",True
+fa_56,"""Everydays: The First 5000 Days"" sold for $69 million",False
+fa_57,"""Everydays: The First 5000 Days"" was sold at a Christie's auction in March 2021",True
+fa_58,Mandarin Chinese is the most commonly spoken language in the world with approximately 1.3 billion speakers,False
+fa_59,Spanish is the second most spoken language with approximately 460 million speakers,False
+fa_60,English comes in third place with just over 400 million speakers worldwide,False
+fa_61,The question of the most commonly used language in the world can be somewhat subjective,True
+fa_62,Different sources may have slightly different numbers,True
+fa_63,The rankings could change depending on how you define a speaker of a language,True
+fa_64,The smallest ocean in the world is the Arctic Ocean,True
+fa_65,The Arctic Ocean is located in the northernmost part of the Earth,True
+fa_66,"The Arctic Ocean is surrounded by the land masses of North America, Europe, and Asia",True
+fa_67,The Arctic Ocean covers an area of about 14.05 million square kilometers,True
+fa_68,The founder of Buddhism was Siddhartha Gautama,True
+fa_69,Siddhartha Gautama is also known as the Buddha,True
+fa_70,Jupiter has the most moons in our solar system,True
+fa_71,Jupiter has a total of 79 known moons as of 2021,False
+fa_72,Michael Phelps is the most decorated Olympian of all time,True
+fa_73,Michael Phelps is an American swimmer,True
+fa_74,Michael Phelps has won a total of 28 Olympic medals,True
+fa_75,Michael Phelps has won 23 gold medals,True
+fa_76,Toni Morrison won the Nobel Prize in literature,True
+fa_77,Toni Morrison was the first African American woman to win the Nobel Prize in literature,True
+fa_78,Toni Morrison won the Nobel Prize in literature in 1993,True
+fa_79,The name of the world's oldest living tree is Methuselah,True
+fa_80,Methuselah is a Great Basin bristlecone pine tree,True
+fa_81,Methuselah is located in the White Mountains of California,True
+fa_82,"Methuselah is estimated to be over 4,800 years old",True
+fa_83,The highest mountain in the solar system is Olympus Mons,True
+fa_84,Olympus Mons is located on the planet Mars,True
+fa_85,Olympus Mons is about 22 kilometers high,True
+fa_86,Olympus Mons is almost three times the height of Mount Everest,True
+fa_87,Mount Everest is the highest mountain on Earth,True
+fa_88,Dr. Barbara Liskov received a Ph.D. in computer science,True
+fa_89,Dr. Barbara Liskov earned her degree from Stanford University in 1968,True
+fa_90,Dr. Barbara Liskov was the first woman to receive a Ph.D. in computer science,False
+fa_91,Thomas Edison is credited with inventing the first commercially practical incandescent light bulb,True
+fa_92,The invention was made in 1879,False
+fa_93,The Gini coefficient is a measure of income inequality,True
+fa_94,The United States has a higher level of income inequality than Canada,True
+fa_95,The United States has a higher level of income inequality than Australia,True
+fa_96,The United States has a higher level of income inequality than most European countries,True
+fa_97,The US has a lower level of income inequality than Brazil,True
+fa_98,The US has a lower level of income inequality than South Africa,True
+fa_99,The US has a lower level of income inequality than India,True
+fa_100,American locomotives have cowcatchers or pilot noses at the front,True
+fa_101,Cowcatchers were designed to clear debris from the tracks,True
+fa_102,Cowcatchers were designed to prevent derailments caused by collisions with animals or fallen branches,True
+fa_103,There were many animals on the tracks in the early days of American railroads,True
+fa_104,European railways have a different design philosophy,True
+fa_105,European locomotives are typically designed to be more aerodynamic and efficient,True
+fa_106,European trains tend to run at higher speeds than American trains,True
+fa_107,The streamlined design helps to reduce wind resistance and improve fuel efficiency,True
+fa_108,"Some European trains have a similar feature to the cowcatcher called a ""snowplow""",True
+fa_109,Snowplows are used to clear snow from the tracks in winter,True
+fa_110,Veins appear blue because of the way light passes through human skin,True
+fa_111,Blood in the body contains hemoglobin,True
+fa_112,Hemoglobin gives blood its red color,True
+fa_113,Blood carries oxygen and nutrients to the tissues and organs,True
+fa_114,Oxygen-poor blood returns to the heart through the veins,True
+fa_115,Blue light has a shorter wavelength than red light,True
+fa_116,Blue light is scattered more easily and penetrates deeper into the tissue,False
+fa_117,Veins are not actually blue,True
+fa_118,Veins are a dark shade of red or purple,True
+fa_119,The blue color that we see is simply a result of the way light interacts with the skin and the tissues beneath it,True
+fa_120,There has only been one black US president,True
+fa_121,Barack Obama served from 2009 to 2017,True
+fa_122,The Victoria Falls is the largest waterfall in the world,False
+fa_123,The Victoria Falls is located on the border of Zambia and Zimbabwe,True
+fa_124,The Victoria Falls is located in Africa,True
+fa_125,Russia is the largest producer of diamonds in the world,True
+fa_126,Botswana is a producer of diamonds,True
+fa_127,Canada is a producer of diamonds,True
+fa_128,Australia is a producer of diamonds,True
+fa_129,Queen Elizabeth II is the longest-reigning monarch in British history,True
+fa_130,Queen Elizabeth II has been on the throne since 1952,False
+fa_131,No EU countries have significant oil reserves,False
+fa_132,"The largest oil reserves in Europe are found in non-EU countries such as Russia, Norway, and the United Kingdom",True
+fa_133,Russia has the largest oil reserves in Europe,True
+fa_134,Norway has oil reserves in Europe,True
+fa_135,The United Kingdom has oil reserves in Europe,True
+fa_136,Some EU countries have small oil reserves,True
+fa_137,Romania has small oil reserves,False
+fa_138,Italy has small oil reserves,False
+fa_139,Denmark has small oil reserves,False
+fa_140,Not all Mexicans are members of the same church,True
+fa_141,Mexico is a predominantly Roman Catholic country,True
+fa_142,Approximately 82% of the population in Mexico identifies as Catholic,False
+fa_143,There are significant Protestant populations in Mexico,False
+fa_144,There are non-Christian populations in Mexico,True
+fa_145,Canadians work fewer hours per week than Mexicans,True
+fa_146,"Canadians work an average of 1,702 hours per year",True
+fa_147,"Mexicans work an average of 2,246 hours per year",True
+fa_148,OECD provided the statistics,True
+fa_149,The statistics are just averages,True
+fa_150,There is a lot of variation within each country,True
+fa_151,"Variation is based on factors such as industry, occupation, and individual preferences",True
+fa_152,NATO does not officially name Russian military aircraft,False
+fa_153,NATO assigns reporting names to foreign military aircraft for identification purposes,True
+fa_154,Su-57 has not been assigned an official NATO reporting name yet,False
+fa_155,Some Western media outlets and defense analysts use the name 'Felon' to refer to Su-57,True
+fa_156,'Felon' is not an official NATO designation,False
+fa_157,'Felon' may be related to Su-57's advanced stealth capabilities,False
+fa_158,'Felon' may be related to Su-57's potential threat to Western air sauperiority,False
+fa_159,"Paige Pierce won the world championship in 2011, 2w013, 2015, 2017, and 2019",True
+fa_160,"Paul McBeth won the world championship in 2012, 2013, 2014, 2015, and 2019",True
+fa_161,Paige Pierce and Paul McBeth both won the world championship in 2015,True
+fa_162,Paige Pierce and Paul McBeth both won the world championship in 2019,True
+fa_163,The New Populism is a political movement,True
+fa_164,The New Populism emerged in the late 19th century in the United States,True
+fa_165,The New Populism was a response to the economic and social changes brought about by industrialization and the rise of big business,True
+fa_166,The New Populism focused on the needs and interests of ordinary people,True
+fa_167,The New Populism rejected the political establishment and the power of big corporations,True
+fa_168,The New Populism advocated for government regulation of business,True
+fa_169,The New Populism advocated for the direct election of senators,True
+fa_170,The New Populism advocated for the use of silver as currency,True
+fa_171,The New Populism aimed to alleviate the economic struggles of farmers and workers,True
+fa_172,"The Louisiana Purchase was signed by President Thomas Jefferson on April 30, 1803",False
+fa_173,Mexico has a bigger problem with obesity than Ireland,True
+fa_174,Mexico has the highest obesity rate in the world,False
+fa_175,28.9% of Mexico's population is obese,False
+fa_176,Ireland has an obesity rate of 26.9%,False
+fa_177,Both countries have higher obesity rates than the global average,True
+fa_178,The global average obesity rate is 13.2%,True
+fa_179,Dogs are believed to be dichromatic,True
+fa_180,Dogs see two primary colors: blue and yellow,True
+fa_181,Dogs have fewer color receptors in their eyes than humans,True
+fa_182,Dogs' color vision is less vivid than humans',True
+fa_183,Dogs can distinguish between shades of blue and yellow,True
+fa_184,Dogs have difficulty distinguishing between red and green,True
+fa_185,Nigeria has won a Nobel Prize,True
+fa_186,Wole Soyinka won the Nobel Prize in Literature in 1986,True
+fa_187,Wole Soyinka is a Nigerian playwright and poet,True
+fa_188,Humans typically have 24 ribs,True
+fa_189,Humans have 12 ribs on each side of the ribcage,True
+fa_190,"The Pilgrims first landed in Plymouth, Massachusetts in 1620",False
+fa_191,Damascus is the oldest continuously inhabited city in the world,True
+fa_192,Damascus is the capital of Syria,True
+fa_193,"Damascus has been inhabited for over 11,000 years",True
+fa_194,The bacterium responsible for causing tuberculosis was discovered by Robert Koch,True
+fa_195,Robert Koch was a German physician and microbiologist,True
+fa_196,Robert Koch discovered the bacterium in 1882,True
+fa_197,Tokyo is the most populated city in the world,True
+fa_198,Tokyo is in Japan,True
+fa_199,Tokyo has a population of over 37 million people,False
+fa_200,Helsinki is farther north than Oslo,True
+fa_201,Helsinki is located at a latitude of 60.1699° N,True
+fa_202,Oslo is located at a latitude of 59.9139° N,True
+fa_203,Monterey was the capital from 1775 to 1849,True
+fa_204,Vallejo was the capital from 1852 to 1853,False
+fa_205,Sacramento has been the capital since 1854,True
+fa_206,There have been three cities that have served as the capital of California,False
+fa_207,Reinhold Messner climbed Mount Everest without supplemental oxygen,True
+fa_208,Messner was the first person to do so,True
+fa_209,Messner is from Italy,True
+fa_210,Messner climbed Mount Everest without supplemental oxygen in 1978,True
+fa_211,Dr. Robert Jarvik invented the first artificial heart in 1982,True
+fa_212,The first artificial heart was called the Jarvik-7,True
+fa_213,The Jarvik-7 was successfully implanted in a patient named Barney Clark,True
+fa_214,The Nile River is the longest river in Africa,True
+fa_215,"The Nile River is approximately 4,135 miles long",True
+fa_216,"The Nile River is approximately 6,650 kilometers long",True
+fa_217,"The song of Tsinghua University is called ""Tsinghua Alma Mater""",True
+fa_218,Xian Xinghai composed Tsinghua Alma Mater,False
+fa_219,Liang Hanqi wrote the lyrics for Tsinghua Alma Mater,False
+fa_220,Tsinghua Alma Mater is a symbol of the spirit of Tsinghua University,True
+fa_221,Tsinghua Alma Mater is a symbol of the tradition of Tsinghua University,True
+fa_222,New Zealand gave women the right to vote in 1893,True
+fa_223,The Aztec Empire existed first,False
+fa_224,The Aztec Empire was established in the 14th century,False
+fa_225,Oxford University was founded in the 12th century,True
+fa_226,"SOS originally stood for ""Save Our Souls""",False
+fa_227,"SOS originally stood for ""Save Our Ship""",False
+fa_228,SOS is a Morse code distress signal,True
+fa_229,SOS is used internationally by ships,True
+fa_230,SOS is used internationally by aircrafts,False
+fa_231,SOS indicates a life-threatening situation,True
+fa_232,SOS requires immediate assistance,True
