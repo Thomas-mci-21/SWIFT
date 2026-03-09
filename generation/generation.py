@@ -16,7 +16,7 @@ from common.modeling import Model
 from common.shared_config import serper_api_key
 from search.query_serper import SerperAPI
 from search.query_ddg import DuckDuckGoSearch
-from generation.prompts import format_prompt
+from generation.prompts import format_prompt, format_intervention_prompt
 
 
 def extract_response(response: str) -> tuple[str, str, str]:
@@ -274,6 +274,240 @@ def run_generation(
     return result_df
 
 
+# ============================================================
+# Branched generation: anchor states + intervention branches
+# ============================================================
+
+ACTIONS = ['support', 'refute', 'resolve']
+
+
+def generate_intervention_query(
+    rater: Model, claim: str, knowledge: str,
+    judgment: str, rationale: str, action: str,
+    max_retries: int = 3,
+) -> tuple[str, dict]:
+    """Generate a targeted search query for a specific intervention type."""
+    prompt = format_intervention_prompt(claim, knowledge, judgment, rationale, action)
+    total_usage = {'input_tokens': 0, 'output_tokens': 0}
+
+    for _ in range(max_retries):
+        response, usage = rater.generate(prompt)
+        if usage:
+            total_usage['input_tokens'] += usage.get('input_tokens', 0)
+            total_usage['output_tokens'] += usage.get('output_tokens', 0)
+        if response and response.strip():
+            return response.strip().strip('"').strip("'"), total_usage
+        time.sleep(0.5)
+
+    return claim, total_usage  # fallback
+
+
+def run_branch(
+    rater: Model, searcher, claim: str, evidence_list: list[dict],
+    label: str, action: str, judgment: str, rationale: str,
+    max_retries: int = 5,
+) -> tuple[float, dict]:
+    """Execute one intervention branch from an anchor state.
+
+    Returns:
+        (post_risk, usage): post-intervention stop-time risk and token usage.
+    """
+    knowledge = format_evidence(evidence_list)
+    total_usage = {'input_tokens': 0, 'output_tokens': 0}
+
+    # Step 1: generate intervention query
+    intervention_query, usage = generate_intervention_query(
+        rater, claim, knowledge, judgment, rationale, action, max_retries=3,
+    )
+    total_usage['input_tokens'] += usage['input_tokens']
+    total_usage['output_tokens'] += usage['output_tokens']
+
+    # Step 2: search
+    try:
+        search_result = searcher.run(intervention_query)
+    except Exception:
+        search_result = "No search results available."
+
+    # Step 3: build post-intervention evidence and re-judge
+    post_evidence = evidence_list + [{'query': intervention_query, 'result': search_result}]
+    post_knowledge = format_evidence(post_evidence)
+    post_prompt = format_prompt(claim, post_knowledge)
+
+    post_judgment = None
+    for _ in range(max_retries):
+        response, usage = rater.generate(post_prompt)
+        if usage:
+            total_usage['input_tokens'] += usage.get('input_tokens', 0)
+            total_usage['output_tokens'] += usage.get('output_tokens', 0)
+        j, _, _ = extract_response(response)
+        if j:
+            post_judgment = j
+            break
+        time.sleep(0.5)
+
+    if not post_judgment:
+        post_judgment = judgment  # no change if failed
+
+    post_verdict = compute_verdict(post_judgment, label)
+    post_risk = 1.0 - post_verdict  # 1 if wrong, 0 if correct
+    return post_risk, total_usage
+
+
+def generate_trajectory_branched(
+    claim_id: str, claim: str, label: str,
+    rater: Model, searcher,
+    max_steps: int = 5, min_steps: int = 1, max_retries: int = 10,
+) -> tuple[list[dict], dict]:
+    """Generate trajectory with anchor-state counterfactual intervention branches.
+
+    At each eligible step, spawns support/refute/resolve branches to compute:
+        r_stop:    current stop-time risk
+        q_*:       risk reduction from each intervention
+        g:         max recoverable risk
+    """
+    samples = []
+    evidence_list = []
+    total_usage = {'input_tokens': 0, 'output_tokens': 0}
+
+    def _add(u):
+        total_usage['input_tokens'] += u.get('input_tokens', 0)
+        total_usage['output_tokens'] += u.get('output_tokens', 0)
+
+    for step in range(max_steps):
+        knowledge = format_evidence(evidence_list)
+        prompt = format_prompt(claim, knowledge)
+
+        judgment, rationale, search_query = '', '', ''
+        for _ in range(max_retries):
+            response, usage = rater.generate(prompt)
+            if usage:
+                _add(usage)
+            judgment, rationale, search_query = extract_response(response)
+            if judgment and search_query:
+                break
+            time.sleep(0.5)
+
+        if not judgment:
+            judgment = 'False'
+        if not search_query:
+            search_query = claim
+
+        verdict = compute_verdict(judgment, label)
+        r_stop = 1.0 - verdict
+
+        # --- Anchor state: run 3 intervention branches ---
+        if step >= min_steps:
+            q_values = {}
+            for action in ACTIONS:
+                post_risk, branch_usage = run_branch(
+                    rater, searcher, claim, list(evidence_list),
+                    label, action, judgment, rationale, max_retries=5,
+                )
+                _add(branch_usage)
+                q_values[action] = r_stop - post_risk  # risk reduction (can be -1, 0, +1)
+
+            g = max(0.0, max(q_values.values()))
+            best_action = max(q_values, key=q_values.get)
+
+            sample = {
+                'claim_id': claim_id,
+                'step': step,
+                'claim': claim,
+                'knowledge': knowledge,
+                'judgment': judgment,
+                'rationale': rationale,
+                'label': label,
+                'verdict': verdict,
+                'r_stop': r_stop,
+                'q_support': q_values['support'],
+                'q_refute': q_values['refute'],
+                'q_resolve': q_values['resolve'],
+                'g': g,
+                'best_action': best_action,
+                'search_query': search_query,
+                'trajectory_id': 0,
+            }
+            samples.append(sample)
+
+        # Continue main trajectory
+        try:
+            search_result = searcher.run(search_query)
+        except Exception:
+            search_result = "No search results available."
+        evidence_list.append({'query': search_query, 'result': search_result})
+
+    return samples, total_usage
+
+
+def run_generation_branched(
+    input_path: str, output_path: str, experiment_name: str,
+    max_steps: int = 5, min_steps: int = 1, max_retries: int = 10,
+    num_search_results: int = 3, start_idx: int = 0, end_idx: int = None,
+    search_engine: str = "ddg", temperature: float = 0.7, trajectory_id: int = 0,
+):
+    """Run branched data generation (anchor states + intervention branches)."""
+    df = pd.read_csv(input_path)
+    print(f"[branched] Loaded {len(df)} claims from {input_path}")
+
+    if end_idx is None:
+        end_idx = len(df)
+    df = df.iloc[start_idx:end_idx]
+    print(f"[branched] Processing claims {start_idx} to {end_idx}")
+
+    rater = Model(temperature=temperature)
+    if search_engine == "ddg":
+        searcher = DuckDuckGoSearch(k=num_search_results)
+    else:
+        searcher = SerperAPI(serper_api_key=serper_api_key, k=num_search_results)
+
+    all_samples = []
+    total_usage = {'input_tokens': 0, 'output_tokens': 0}
+
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Generating (branched)"):
+        claim_id = row['claim_id']
+        claim = row['claim']
+        label = row['label']
+
+        samples, usage = generate_trajectory_branched(
+            claim_id=claim_id, claim=claim, label=label,
+            rater=rater, searcher=searcher,
+            max_steps=max_steps, min_steps=min_steps, max_retries=max_retries,
+        )
+
+        for s in samples:
+            s['trajectory_id'] = trajectory_id
+
+        all_samples.extend(samples)
+        total_usage['input_tokens'] += usage['input_tokens']
+        total_usage['output_tokens'] += usage['output_tokens']
+
+        if (idx + 1) % 5 == 0:
+            temp_df = pd.DataFrame(all_samples)
+            temp_df.to_csv(output_path, index=False)
+            print(f"\n[branched] Saved {len(all_samples)} samples to {output_path}")
+
+    result_df = pd.DataFrame(all_samples)
+    result_df.to_csv(output_path, index=False)
+
+    print(f"\n=== Branched Generation Complete ===")
+    print(f"Total samples: {len(all_samples)}")
+    print(f"Total input tokens: {total_usage['input_tokens']}")
+    print(f"Total output tokens: {total_usage['output_tokens']}")
+    print(f"Saved to: {output_path}")
+
+    log_path = f"logs/{experiment_name}_generation_log.txt"
+    os.makedirs("logs", exist_ok=True)
+    with open(log_path, 'w') as f:
+        f.write(f"Experiment: {experiment_name} (branched)\n")
+        f.write(f"Input: {input_path}\n")
+        f.write(f"Output: {output_path}\n")
+        f.write(f"Total samples: {len(all_samples)}\n")
+        f.write(f"Total input tokens: {total_usage['input_tokens']}\n")
+        f.write(f"Total output tokens: {total_usage['output_tokens']}\n")
+
+    return result_df
+
+
 def main():
     parser = argparse.ArgumentParser(description='SWIFT Phase 1: Data Generation')
     parser.add_argument('--experiment_name', type=str, required=True, help='Experiment name')
@@ -288,15 +522,17 @@ def main():
     parser.add_argument('--search_engine', type=str, default='ddg', choices=['ddg', 'serper'], help='Search engine')
     parser.add_argument('--temperature', type=float, default=0.7, help='LLM temperature for diversity')
     parser.add_argument('--trajectory_id', type=int, default=0, help='Trajectory ID for multi-run generation')
+    parser.add_argument('--mode', type=str, default='legacy', choices=['legacy', 'branched'],
+                        help='legacy: original single-trajectory; branched: anchor-state intervention branches')
 
     args = parser.parse_args()
 
     if args.output_path is None:
         args.output_path = f"data/generated/{args.experiment_name}_generated.csv"
-
     os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
 
-    run_generation(
+    gen_fn = run_generation if args.mode == 'legacy' else run_generation_branched
+    gen_fn(
         input_path=args.input_path,
         output_path=args.output_path,
         experiment_name=args.experiment_name,

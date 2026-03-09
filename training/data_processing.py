@@ -60,6 +60,50 @@ def prepare_dataset(df, num_samples=None):
     })
 
 
+def prepare_dataset_v2(df, num_samples=None):
+    """Prepare dataset for multi-head Critic training (recoverability).
+
+    Same NLI input format, but with continuous targets:
+        r_stop:     stop-time risk (0 or 1)
+        q_support:  risk reduction from support intervention
+        q_refute:   risk reduction from refute intervention
+        q_resolve:  risk reduction from resolve intervention
+    """
+    if num_samples is not None:
+        df = df.head(num_samples)
+
+    premises = []
+    hypotheses = []
+    r_stops = []
+    q_supports = []
+    q_refutes = []
+    q_resolves = []
+
+    for _, row in df.iterrows():
+        premise = (
+            f"Claim: {row['claim']}\n"
+            f"Evidence:\n{row['knowledge']}\n"
+            f"Rationale: {row['rationale']}"
+        )
+        hypothesis = f"The judgment {row['judgment']} is correct."
+
+        premises.append(premise)
+        hypotheses.append(hypothesis)
+        r_stops.append(float(row['r_stop']))
+        q_supports.append(float(row['q_support']))
+        q_refutes.append(float(row['q_refute']))
+        q_resolves.append(float(row['q_resolve']))
+
+    return Dataset.from_dict({
+        "premise": premises,
+        "hypothesis": hypotheses,
+        "r_stop": r_stops,
+        "q_support": q_supports,
+        "q_refute": q_refutes,
+        "q_resolve": q_resolves,
+    })
+
+
 def create_dataset_dict(train_set, val_set, test_set):
     """Create HuggingFace DatasetDict."""
     return DatasetDict({
@@ -84,4 +128,28 @@ def tokenize_data(dataset, tokenizer, max_length):
         preprocess,
         batched=True,
         remove_columns=["premise", "hypothesis"],
+    )
+
+
+def tokenize_data_v2(dataset, tokenizer, max_length):
+    """Tokenize dataset for multi-head training. Keeps r_stop and stacks q values."""
+    def preprocess(batch):
+        encoded = tokenizer(
+            batch["premise"],
+            batch["hypothesis"],
+            max_length=max_length,
+            padding="max_length",
+            truncation="only_first",
+        )
+        # Stack q values into q_targets: list of [q_support, q_refute, q_resolve]
+        encoded["q_targets"] = [
+            [s, r, v] for s, r, v in
+            zip(batch["q_support"], batch["q_refute"], batch["q_resolve"])
+        ]
+        return encoded
+
+    return dataset.map(
+        preprocess,
+        batched=True,
+        remove_columns=["premise", "hypothesis", "q_support", "q_refute", "q_resolve"],
     )

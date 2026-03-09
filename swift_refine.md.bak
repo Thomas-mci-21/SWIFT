@@ -1,0 +1,329 @@
+# SWIFT Refinement Plan: Adversarial Retrieval & Verdict-Contrastive Stopping
+
+## 1. 核心动机与论文 Story (Motivation & Framing)
+
+针对现有 iterative fact-checking 方法（特别是将其与通用 QA 区分开来），SWIFT 致力于解决以下三个 Domain-specific 痛点：
+
+1. **检索层的确认偏差 (Confirmation Bias in Retrieval):** LLM 倾向于生成单向 query，寻找支持其初始判断的证据，导致证据池严重倾斜。
+2. **停止决策的过度自信 (Overconfident Stopping):** 传统的单一置信度 (Credibility) 评估无法区分“证据确实充分且指向同一结论”和“证据存在巨大争议但碰巧有一条支持了当前判断”。
+3. **LLM-as-Critic 的成本壁垒 (Cost Barrier of LLM-based Evaluation):** 用 GPT-4o 等大模型做 stopping criterion 成本与 generation 相当；而传统轻量替代（固定阈値、规则）完全不可泵化。SWIFT 的自监督 86M Critic 是唯一同时满足「**轻量（86M）+ 无需人工标注 + 跨 LLM 可泵化**」三点的解法。
+
+**核心 Novelty (The SIGIR Defense):** 通用 QA 任务的答案空间是开放式的，无法进行对立假设的对比。而 Fact-checking 的判断天然是二元的 (True/False)。SWIFT 利用这一**物理层面的结构性差异**，提出用单一 Critic 模型对“正反双重视角”进行对比评估，从而量化证据的“决定力 (Conclusiveness)”。
+
+---
+
+## 2. 核心架构设计 (Core Architecture)
+
+新版 SWIFT 包含两个新增核心组件，并带有备选的 Critic 对比增强训练机制。
+
+### Component A: 轻量级对抗检索 (Adversarial Evidence Retrieval)
+* **机制:** LLM 在每一步生成检索请求时，强制派生出一正一反两个 Query。
+* **作用:** 模拟 Mixture-of-Agents (MoA) 中的多视角 Proposers，构建包含 Support 和 Refute 两面信息的混合证据池。
+
+### Component B: 决定力对比门控 (Verdict-Contrastive Stopping)
+* **机制:** 使用同一个 DeBERTa Critic 模型 $C$，对同一批混合证据，分别测试 $True$ 和 $False$ 两个假设。
+* **公式:** * 假设为真时的支持度: $p_{true} = C(claim, evidence, hypothesis=True)$
+  * 假设为假时的支持度: $p_{false} = C(claim, evidence, hypothesis=False)$
+  * 证据决定力 (Conclusiveness): $\delta = |p_{true} - p_{false}|$
+* **双重门控停止条件 (Dual-Gated Stopping Condition):**
+  系统仅在以下条件同时满足时停止搜索并输出结果：
+  $$p_j^{LLM} \ge \tau_1 \land \delta \ge \tau_2$$
+  *(其中 $p_j^{LLM}$ 为当前 LLM 判断的 Credibility，$\tau_1, \tau_2$ 为超参数阈值)*
+
+### δ 的决策理论解释 (Decision-Theoretic Grounding for δ)
+
+> **Paper 写作用途：** 此节内容可直接移植为论文 Section 3.x，将 δ 从“取差值”升格为有决策论依据的停止准则，用于回应 reviewer "why not just threshold p_true" 的质疑。
+
+**贝叶斯最优停止视角 (Bayesian Optimal Stopping)**
+
+在二元假设检验框架下，将 $p_{true}$ 和 $p_{false}$ 视为 Critic 对两种判断的后验支持度。归一化后的单侧后验为 $\hat{p} = p_{true}/(p_{true}+p_{false})$，则：
+
+$$\delta = |p_{true} - p_{false}| = (p_{true}+p_{false}) \cdot |2\hat{p} - 1|$$
+
+当 $\delta \approx 0$ 时，$\hat{p} \approx 0.5$，后验接近均匀分布——此时继续检索具有最高的**预期信息增益（Expected Value of Information, EVOI）**；当 $\delta \to 1$ 时，后验高度集中于单一假设，额外检索步骤的 EVOI 趋近于零。因此，$\delta$-threshold 门控可理解为**贝叶斯最优停止准则的轻量代理**：仅当继续检索不再有实质信息价值时才做出停止决策。
+
+*关键区别于单侧阈值：* 若仅用 $p_{true} \geq \tau$ 作为停止条件，系统无法区分「$p_{true}=0.9, p_{false}=0.1$（证据决定性地支持 True）」与「$p_{true}=0.9, p_{false}=0.85$（Critic 对两者均高度支持，存在内部矛盾）」——后者恰是需要继续检索的情形。$\delta$ 捕捉的是后验的**集中度（concentration）**，而非绝对值。
+
+**适应性保形预测视角 (Adaptive Conformal Prediction)**
+
+将阈值 $\tau_2$ 视为置信参数，系统隐式维护一个**判断候选集**（verdict candidate set）：
+
+$$\mathcal{C}(\tau_2) = \left\{j \in \{True, False\} : p_j \geq \frac{1-\tau_2}{2}\right\}$$
+
+* **继续检索：** $\delta < \tau_2 \Rightarrow |\mathcal{C}| = 2$，两个判断均未被证据排除，需补充证据缩小候选集。
+* **停止输出：** $\delta \geq \tau_2 \Rightarrow |\mathcal{C}| = 1$，证据已将候选集收缩为单一判断，系统提交结论。
+
+这将 $\delta$-gating 解读为**顺序证据驱动的预测集收缩**（sequential prediction-set reduction），赋予其类似自适应保形预测的决策论意义。**额外优势：** 该准则仅依赖两个概率的*相对差值*，对 Critic 的系统性校准偏差（calibration bias）具有天然鲁棒性——即使 $p_{true}$ 整体偏高，只要差值信号单调可靠，停止判断就不受影响。
+
+---
+
+## 3. 案例演示 (Case Study for Intuition)
+
+* **Claim:** 阿司匹林可以治疗新冠肺炎。
+* **Evidence Pool (Adversarial):** * [支持方] 早期观察性研究认为有益...
+  * [反驳方] WHO 明确指出无效且有出血风险...
+* **Contrastive Evaluation:**
+  * 评估 $Hypothesis=True$: 因为存在 WHO 的强烈反驳，Critic 认为当前证据池不支持 True，给出 $p_{true} = 0.2$。
+  * 评估 $Hypothesis=False$: WHO 的证据强烈支持 False，给出 $p_{false} = 0.85$。
+* **Conclusiveness:** $\delta = |0.2 - 0.85| = 0.65$。
+* **决策:** $\delta$ 较大（如 $\delta > \tau_2=0.5$），说明证据不再模棱两可，已明确倒向 False，系统安全停止搜索。
+
+---
+
+## 4. 给 AI Agent 的代码修改指南 (Implementation Guide for Agents)
+
+Agent 请注意：当前任务时间极紧，请遵循“最小代码改动”原则。优先修改 Inference 流程进行 Pilot Test。
+
+### Phase 1: 推理端修改 (Inference Only - 优先执行)
+
+**1. `generation/prompts.py`**
+* **目标:** 修改 LLM 状态生成的 Prompt 模板。
+* **动作:** 在要求输出 JSON 的 schema 中，将原有的单一 `search_query` 替换为 `search_query_support` 和 `search_query_refute`。
+* **⚠️ 关键：Refute Query 的 Prompt 措辞必须明确，不能只写 "a query to refute the claim"。** LLM 若只被告知"生成一个反驳查询"，会倾向于在 support query 前加 "not" 或否定词，两个 query 几乎携带相同的信息，对抗性完全失效。
+
+  正确的 Prompt 指令应当是：
+  * `search_query_support`: `"A search query to find evidence that SUPPORTS the current judgment. Focus on authoritative sources, direct factual evidence, or official statements."`
+  * `search_query_refute`: `"A search query to find evidence that CHALLENGES or CONTRADICTS the current judgment. Think about: counterexamples, expert disagreement, known exceptions, alternative scientific interpretations, or fact-checking organizations that dispute this claim. The query must be substantively different from search_query_support."`
+* **Pilot Test 时必须人工检查 Refute Query 质量：** 随机抽取 10 条 (support, refute) query 对，确认两者从不同角度出发。若超过 30% 的 refute query 只是 support query 的简单否定，需在 Prompt 中加入 few-shot 示例。
+
+**2. `generation/generation.py`**
+* **目标:** 适配双 Query 搜索。
+* **动作:** 解析 LLM 返回的 JSON。并行调用搜索引擎（如 DuckDuckGo）分别执行这两个 Query，并将返回的 snippets 合并为一个全局 `evidence_pool` 供 Critic 使用。
+
+**3. `inference/inference.py`**
+* **目标:** 实现 Verdict-Contrastive 逻辑和双重门控。
+* **动作:** 拦截送给 Critic 的输入，构造**两次非对称调用**（asymmetric calls）：
+
+  | | claim | evidence | judgment | rationale |
+  |---|---|---|---|---|
+  | **调用 A（actual）** | ✅ | ✅ | LLM 当前判断（如 True） | ✅ 传入 LLM 原始 rationale |
+  | **调用 B（opposite）** | ✅ | ✅ | 对立判断（如 False） | ❌ **传空字符串 `""`** |
+
+  * **⚠️ 为什么调用 B 必须传空 rationale？**
+
+    LLM 输出的 `rationale` 是"我为什么认为这个 claim 是 **True**"的推理过程。如果把这段支持 True 的推理传入 Critic，同时让 Critic 评估假设 `"The judgment False is correct"`，Critic 的 premise 和 hypothesis 就产生了**逻辑矛盾**：
+
+    > Premise 在说："根据推理，True 是正确的"
+    > Hypothesis 在问："False 是否正确？"
+
+    DeBERTa 对这种内部矛盾的反应是不可预测的，会严重污染 $p_\text{false}$ 的数值，使 $\delta$ 变成噪声。传空 rationale 让调用 B 变成**纯粹的证据问题**——"仅凭这些证据，False 这个判断合理吗？"——信号干净且逻辑自洽。
+
+  * 计算 $\delta = |p_\text{actual} - p_\text{opposite}|$
+  * 停止条件：`p_actual >= τ₁ AND δ >= τ₂`
+  * **Debug 必须打印：** `[step={t}] judgment={j}, p_actual={:.3f}, p_opposite={:.3f}, δ={:.3f}, stop={bool}`
+
+### Phase 2: 训练端增强 (Contrastive Retraining - 视 Phase 1 结果执行)
+*(仅当旧 Critic 计算出的 $\delta$ 区分度不足、呈现随机噪声时执行此步)*
+
+**1. `training/data_processing.py`**
+* **目标:** 对现有的 self-practicing 轨迹数据进行离线增强 (Data Augmentation)。
+* **动作:** 遍历现有的训练样本。对于每一个 `(Claim, Evidence_pool, Ground_Truth)`，派生出两条数据：
+  * **样本 A (Positive/Negative):** Hypothesis 设为 True。如果 Ground_Truth == True，Label=1；否则 Label=0。
+  * **样本 B (Positive/Negative):** Hypothesis 设为 False。如果 Ground_Truth == False，Label=1；否则 Label=0。
+* **效果:** 原训练集大小翻倍，强制模型学习在同一证据池下，True 和 False 假设的支持度差异。然后运行标准训练脚本即可。
+  * **注意：派生样本 A 和 B 中的 rationale 都传空字符串 `""`**，与推理时调用 B 的逻辑保持一致，避免引入新的 train/inference 不一致性。
+
+---
+
+## 5. Self-Learning 有效性分析 (Does Self-Practicing Still Work?)
+
+这是改动后最需要回答的核心问题。**结论：Self-Practicing 的核心逻辑完全保留，但存在一个 train-inference distribution gap，Phase 2 重训是修复该 gap 的关键。**
+
+### 什么变了，什么没变
+
+| 组件 | 现有 SWIFT | 新 SWIFT | 是否需要重新运行 |
+|------|-----------|---------|----------------|
+| 轨迹数据生成 | 单向 query | **不变**（Generation 脚本不改） | ❌ 不需要重跑 |
+| Self-Practicing 标注逻辑 | verdict = (judgment == ground_truth) | **不变** | ❌ 不需要重跑 |
+| Critic 推理时的输入分布 | 单向证据 + rationale | 双向混合证据 + rationale 非对称 | Phase 1 直接适配 |
+| Critic 训练数据格式 | 单向证据，单一 hypothesis 方向 | 需增加对立 hypothesis 方向样本 | Phase 2 离线增强 |
+
+### Train-Inference Distribution Gap（必须正视）
+
+**问题**：现有 Critic 训练时只见过"单向证据 + 单一 hypothesis 方向"的样本。推理时突然出现两个变化：(1) 证据池里混入了反驳方向的 snippets，(2) 需要对 opposite hypothesis 做打分（训练时从未出现过 rationale 为空的 opposite 样本）。
+
+**严重程度**：中等。DeBERTa 的 NLI 预训练对 entailment/contradiction 有底层理解，Phase 1 pilot test 的目的就是实测这个 gap 到底有多大。
+
+**Phase 2 如何修复（无需重跑 LLM generation，纯离线操作）：**
+
+```
+现有训练样本:
+  (claim, evidence_single, judgment=True, rationale="因为...", verdict=1)
+
+↓ 派生出两条对比样本:
+  样本 A:  (claim, evidence_single, hypothesis=True,  rationale="",  label = ground_truth==True  ? 1 : 0)
+  样本 B:  (claim, evidence_single, hypothesis=False, rationale="",  label = ground_truth==False ? 1 : 0)
+```
+
+两条样本用同一批证据，不同 hypothesis 方向，强制 Critic 学会区分"证据支持 True"和"证据支持 False"的程度差异，从而让 δ 有实质意义。
+
+---
+
+## 6. 极速执行 Checkpoints
+
+- [ ] **Check 1:** 改好三个文件（`prompts.py` / `generation.py` / `inference.py`），选取 **50 条 FCB dev set** 试跑。
+- [ ] **Check 2 — Refute Query 质量检查:** 人工抽看 10 条 (support, refute) query 对，确认 refute query 不只是 support 的简单否定。如质量差，加强 prompt 后重跑。
+- [ ] **Check 3 — δ 区分度检查:** 观察日志中 δ 的分布。
+  * **δ 有区分度**（clear case 的 δ 普遍 > 0.3，ambiguous case 的 δ < 0.2）→ 旧 Critic 可用，直接跑全量实验。
+  * **δ 接近随机噪声**（分布集中在 0.1–0.2，无规律）→ 执行 Phase 2 数据增强 + 1 小时 A40 重训，随后重回 Check 3。
+- [ ] **Check 4:** 全量实验完成，对比 SWIFT（原）vs SWIFT-Adv（新）的 Accuracy / F1 / Avg Steps，验证改进显著性。
+
+---
+
+## 7. 实验设置决策 (Experimental Setup Decisions)
+
+### 7.1 训练集数据集选择
+
+**决定：FCB-only 训练，FacTool-QA 和 FELM-WK 保留为 zero-shot OOD 评估。**
+
+| 数据集 | 角色 | 大小 |
+|---|---|---|
+| FactCheck-Bench train (504 claims) | Critic 训练数据来源 | ~6000 raw → ~12000 (contrastive augmented) |
+| FactCheck-Bench test (127 claims) | In-distribution 主要评估 | 127 |
+| FacTool-QA (233 claims) | Zero-shot OOD 测试 | 233 |
+| FELM-WK (329 claims) | Zero-shot OOD 测试 | 329 |
+
+**理由：**
+- 训练集混合会使三个 dataset 都没有完整的 test set，方差变大，统计显著性难做
+- FCB 504 claims × 4 steps × 3 trajectories × 2（contrastive augmentation）≈ 12000 条对 DeBERTa-v3-base (86M) 完全够用
+- 保留 FacTool + FELM 作为纯 OOD 是回答 "Is the Critic domain-agnostic or overfit to FCB?" 的最干净实验——这个问题 reviewer 必问
+- Cross-dataset 泛化降级为一个 **secondary finding**（在 discussion section 讨论），不再作为核心 claim 放入 abstract
+
+### 7.2 Generation LLM 选择（可用：gpt-4o-mini / gpt-5 / gpt-5-mini）
+
+**决定：Trajectory generation 用 gpt-5-mini。推理测试覆盖全部三个模型。**
+
+**三个模型对比：**
+
+| 模型 | 生成 adversarial dual-query 质量 | Bulk generation 成本 | 推荐用途 |
+|---|---|---|---|
+| gpt-4o-mini | **有风险**：复杂对立视角思维能力较弱，refute query 可能与 support query 高度相似，使 Component A 失效 | 最低 | 仅推理测试 |
+| **gpt-5-mini** | **适合**：gpt-5 系列的理解和指令遵循能力，能生成 substantively different 的对立 query | 合理 | ✅ **Trajectory generation** |
+| gpt-5 | 最好 | 极高（504×5×3 次 API calls） | 仅推理测试 |
+
+**核心决策逻辑：** Component A（adversarial dual-query）的整个价值取决于 refute query 的质量。如果用 gpt-4o-mini 生成，refute query 极有可能退化为 support query 的简单否定（"X is NOT true"），证据池的对抗性完全消失，导致 Δ 信号接近随机噪声。gpt-5-mini 是 cost 与 quality 的最优平衡点。
+
+**推荐实验矩阵（Cross-LLM Generalization）：**
+
+| 实验 | Critic 训练来源 | 推理 LLM | 含义 |
+|---|---|---|---|
+| 主实验 | gpt-5-mini trajectories | **gpt-5-mini** | In-distribution |
+| Cross-LLM ① | gpt-5-mini trajectories (same Critic) | **gpt-5** | Upward transfer：小模型轨迹的 Critic 泛化到更强模型 |
+| Cross-LLM ② | gpt-5-mini trajectories (same Critic) | **gpt-4o-mini** | Downward transfer：泛化到更弱模型 |
+
+这个矩阵给出了非常强的 **Cross-LLM Generalization** 实验段落：同一个 86M Critic，在三个能力层级不同的 LLM 上都有效。
+
+---
+
+## 8. 相关工作全景与 Novelty 定位 (Related Work & Novelty Analysis)
+
+*(基于 2026-03-09 文献检索结果)*
+
+### 8.1 核心竞争论文
+
+**① FIRE: Fact-checking with Iterative Retrieval and Verification** (NAACL 2025 Findings, arXiv:2411.00784)
+- **方法：** LLM agent 统一机制：每步决定"输出最终答案"还是"生成下一个 search query"，基于当前判断的置信度。成本比静态检索低 7.6×。
+- **与 SWIFT 的差异：** 这正是 SWIFT 要解决的问题——FIRE 依赖 LLM 自身置信度作为停止信号，而 LLM 自评估存在系统性过度自信。FIRE 使用单向 query，无 adversarial retrieval，无独立 Critic，无对立假设对比。
+- **定位建议：** 在 Introduction 明确点名 FIRE，指出"FIRE 已证明 iterative retrieval 可以大幅减少成本，但其停止决策仍耦合于 LLM 自评估——SWIFT 解耦这一问题并引入 evidence conclusiveness 量化机制。"
+
+**② Tool-MAD: Multi-Agent Debate Framework for Fact Verification with Adaptive Retrieval** (Jan 2026, arXiv:2601.04742)
+- **方法：** 每个 agent 拥有**不同的外部工具**（search API / RAG），agent 间 debate，adaptive query 改写，最终 Judge agent 整合 Faithfulness + Answer Relevance 打分。
+- **与 SWIFT 的差异：** 架构层面不同——需要多个昂贵 LLM agent 同时运行（成本高 10×+），"diverse perspectives"来自多 agent，而非 adversarial dual-query 设计；没有对立假设对比评分（$\delta$）；没有自监督训练的 lightweight Critic；没有系统性停止机制。
+- **潜在 framing 风险：** Tool-MAD 的摘要含 "adaptive retrieval" 和 "diverse perspectives"，reviewer 可能认为与 Component A 重叠。必须在 related work 清楚区分：SWIFT 是单 agent + lightweight Critic 架构，Component A 的目的不是"多样性"而是**系统性消除确认偏差**，而 $\delta$-gate（Component B）才是核心 novelty。
+
+**③ MERMAID: Memory-Enhanced Retrieval with Multi-Agent Iterative Knowledge Grounding** (Jan 2026, arXiv:2601.22361)
+- **方法：** 多 agent Reason-Action 框架，引入 evidence memory 实现 cross-claim 证据复用，提高搜索效率和一致性。
+- **与 SWIFT 的差异：** MERMAID 关注的是 cross-claim 证据管理，不解决 "how to know when to stop" 的 stopping criterion 问题；同样依赖 LLM 自身推理，无轻量独立 Critic；无对立假设评分。
+- **定位建议：** 并排展示为"关注不同维度的效率优化"，不构成直接竞争。
+
+**④ WKGFC: Multi-Sourced Multi-Agent Evidence Retrieval** (Feb 2026, arXiv:2603.00267)
+- **方法：** 结合知识图谱 + web 搜索，MDP 自动决策检索动作，prompt optimization fine-tune agent LLM。
+- **与 SWIFT 的差异：** 依赖结构化 KG（需要高质量 KG 存在），无对立假设评分，无 $\delta$ gate，无 lightweight Critic。
+
+### 8.2 概念相关（不构成直接竞争）
+
+**VitaminC: Robust Fact Verification with Contrastive Evidence** (NAACL 2021, arXiv:2103.08541)
+- 用 support/refute 对比证据对（Wikipedia 修订对）训练 NLI 模型，证明 contrastive training 提升鲁棒性，引用次数 264。
+- **与 SWIFT 的差异：** VitaminC 是 training data augmentation（给已有证据做对比扩充），目标是提升 NLI 模型的鲁棒性；SWIFT 是 **retrieval-time decision**（动态对比 True/False 假设的置信差），用于实时 stopping criterion。两者在 "contrastive" 思想上有精神传承关系，但具体问题、方法、场景完全不同，可以在 related work 中正面引用。
+
+**DeepResearcher** (Apr 2025, arXiv:2504.03160)
+- RL 训练 web search agent，出现 emergent "cross-validate from multiple sources" 行为。
+- 与 SWIFT 无直接竞争：重量级 RL 训练整个 LLM，不是 fact-checking 专属，无 $\delta$-gate。
+
+### 8.3 Novelty 总结（文献中未被覆盖的内容）
+
+经过全面搜索，**以下三点在现有文献中均无直接先例：**
+
+1. **$\delta = |p_{true} - p_{false}|$ 作为 evidence conclusiveness 量化指标，用于 stopping criterion**  
+   搜遍所有相关文献，没有任何一篇用同一模型对 True 和 False 两个对立假设分别评分并用差值作为停止门控。这是最强 novelty，无竞争。
+
+2. **单 agent 强制生成 support + refute 对立双 query 的系统性设计**  
+   Tool-MAD 虽有 "diverse perspectives"，但那是多 agent + 不同工具，不是在单 agent 内系统性派生对立视角 query。在 **单 agent iterative fact-checking** 管道中使用对立双 query 的原则性设计，文献中没有做过。
+
+3. **"Binary judgment structure as structural prior"框架**  
+   Fact-checking 的 True/False 二元判断结构使得 evidence conclusiveness 这个概念可定义、可量化；而开放式 QA 的答案空间无边界，不支持这种对比。这个 observation 在所有相关工作中均未被明确提出作为 paper contribution。
+
+---
+
+## 9. 更新后的 Paper Framing（投稿 Narrative）
+
+### 9.1 当前 Framing 的问题（需替换）
+
+旧 Abstract/Introduction 的核心叙事是 **"用小 Critic 替代 LLM self-assessment"**，这是一个 efficiency play。问题：
+- "小模型替大模型"在 2026 年已不够新颖（knowledge distillation 等变体众多）
+- Cross-dataset generalization 作为核心 claim 撑不起 novelty（已降级为 secondary finding）
+- LLM 过度自信问题的描述太 generic，未与 fact-checking 的 domain-specific 特征挂钩
+
+### 9.2 推荐新 Framing：Evidence Conclusiveness
+
+**两大核心支柱（论文 Narrative 的骨架）：**
+
+| 支柱 | 解决的痛点 | 核心主张 |
+|------|-----------|----------|
+| **I. Adversarial Retrieval** | LLM 检索确认偏差 | 强制派生 support + refute 双 query，系统性去偏证据池 |
+| **II. Self-Learning Verdict-Contrastive Critic** | 停止信号过度自信 + LLM Critic 成本高 | 自监督 hindsight 训练（无人工标注）+ δ-gate 量化 evidence conclusiveness；86M，跨 LLM 可泵化 |
+
+> **核心论点（一句话）：**  
+> SWIFT demonstrates that fact-checking's **binary verdict structure** enables a uniquely principled notion of evidence conclusiveness — unmeasurable in open-ended QA — and exploits it via two synergistic innovations: *adversarial dual-query retrieval* (Pillar I, de-biasing the evidence pool) and a *self-learning verdict-contrastive Critic* (Pillar II, operationalizing conclusiveness via δ-gate at 86M parameter cost) — achieving reliable stopping at a fraction of LLM-critic inference cost.
+
+**三段式论文故事线：**
+
+**Problem（Why existing methods fail, with domain-specific grounding）**  
+Iterative fact-checking systems face two coupled failures that are specific to this domain:  
+(1) **Confirmation-biased retrieval** — LLMs generate single-direction queries seeking evidence for their initial judgment, creating systematically skewed evidence pools.  
+(2) **Confidence ≠ Conclusiveness** — A high confidence score cannot distinguish between "evidence overwhelmingly supports True" and "evidence is mixed but the LLM happens to lean True." Existing stopping criteria (including FIRE's confidence-based mechanism) cannot detect whether the evidence *discriminates* between verdicts.
+
+**Insight（The structural prior that makes fact-checking special）**  
+Unlike open-ended QA where the answer space is unbounded, fact-checking verdicts are **structurally binary (True/False)**. This binary structure enables a principled definition of **evidence conclusiveness**: evaluate the same evidence pool under *both* hypotheses, and measure the gap $\delta = |p_{\text{true}} - p_{\text{false}}|$. A large $\delta$ indicates the evidence decisively points one way; a small $\delta$ signals ambiguity and the need for further retrieval. This concept is **mathematically impossible** in open-ended QA.
+
+**Method（SWIFT's two pillars + efficiency payoff）**
+
+*Pillar I — Adversarial Retrieval:* At each iteration, a single LLM is prompted to generate both a support-seeking and a contradiction-seeking query. The two retrieved evidence sets are merged into a mixed pool, systematically counteracting the confirmation bias inherent in single-direction retrieval.
+
+*Pillar II — Self-Learning Verdict-Contrastive Critic:* A DeBERTa-v3-base Critic (86M) is trained via **self-supervised hindsight correctness labeling** — no human annotation, cross-LLM transferable, black-box LLM compatible. At inference, the same Critic evaluates the mixed evidence pool under *both* verdicts asymmetrically (actual judgment with rationale; opposite judgment with empty rationale); $\delta = |p_{true} - p_{false}|$ operationalizes evidence conclusiveness and gates the stopping decision alongside LLM credibility.
+
+*Efficiency Payoff:* The 86M Critic costs orders of magnitude less than LLM-as-judge at inference time and requires no access to logprobs or model internals. Combined with the $\delta$-gate (which avoids unnecessary retrieval steps on already-conclusive evidence), SWIFT achieves **FIRE-comparable or superior accuracy at N× lower inference cost** — a concrete, quantifiable advantage over both LLM-critic baselines and fixed-$k$ retrieval.
+
+### 9.3 贡献层次（按 novelty 强度排序）
+
+| 贡献 | 类型 | Novelty 强度 | 对应 component |
+|---|---|---|---|
+| Evidence conclusiveness 概念 + $\delta$-gate + **贝叶斯/保形预测双视角理论支撑** | **Conceptual + Theoretical** | ★★★ 最强，无竞争；理论包装将“取差值”升格为有决策论依据的最优停止代理 | Pillar II (Inference) |
+| Adversarial dual-query retrieval 系统性设计 | **Methodological** | ★★☆ 强，与 Tool-MAD 可清晰区分（单 agent 内系统性派生，非多 agent） | Pillar I |
+| Self-supervised hindsight Critic + cross-LLM transferability | **Practical/Empirical** | ★★☆ 有说服力，FIRE 对比明显；无需人工标注，黑盒 LLM 兼容 | Pillar II (Training) |
+| **86M Critic + δ-gate vs. FIRE/LLM-critic: accuracy ≥, cost N×↓** | **Efficiency (First-Class)** | ★★☆ 升格为 first-class practical contribution；可量化，reviewer 买账，与 FIRE 直接对位 | System design |
+
+### 9.4 需要在 Paper 中明确新增的内容
+
+1. **新增 Section: "Why Binary Verdicts Enable Conclusiveness Measurement"**  
+   正式推导 $\delta$ 的定义，与 open-ended QA 的对比，给出 $\delta$ 的直觉（低 $\delta$ = ambiguous evidence, 高 $\delta$ = discriminative evidence）。
+
+2. **新增 Analysis: $\delta$ Distribution Analysis**  
+   对 FCB test set 分析 $\delta$ 的分布：easy cases（ground truth 明确）vs. hard cases（人类标注者也不一致）的 $\delta$ 分布是否确实呈现差异？这是 $\delta$ 有 meaningful signal 的重要经验证据。
+
+3. **新增 Ablation（表格需要有）：**
+   - SWIFT-full (A + B) vs. SWIFT-B-only (单向 query + $\delta$ gate) vs. SWIFT-A-only (双向 query + 原始单侧 critic 停止) vs. SWIFT-original（旧版）
+   - $\tau_2$ sensitivity（证明 $\delta$ 不只是换了个 threshold，而是真正提供了正交信息）
+
+4. **错误分析 (Error Analysis) 强化：**  
+   展示 $\delta$ 低但系统停止（false conclusive）的 case，以及这些 case 是否对应现实中争议性 claim（例如科学不确定性高的 claim）。

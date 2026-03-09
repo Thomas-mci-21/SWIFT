@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from collections import Counter
 
 
-def main(input_path, train_path, test_path, log_path, split=0.2):
+def main(input_path, train_path, test_path, log_path, split=0.2, mode='binary'):
     # Load the CSV file
     df = pd.read_csv(input_path)
 
@@ -20,11 +20,10 @@ def main(input_path, train_path, test_path, log_path, split=0.2):
     with open(log_path, "a") as f:
         f.write(f"Generated Data Size: {len(df)}\n")
         f.write(f"Unique Claims: {df['claim_id'].nunique()}\n")
-        verdict_dist = df['verdict'].value_counts().to_string()
-        f.write("Verdict Distribution:\n" + '\n'.join(verdict_dist.split('\n')[1:]) + "\n")
+        if 'verdict' in df.columns:
+            verdict_dist = df['verdict'].value_counts().to_string()
+            f.write("Verdict Distribution:\n" + '\n'.join(verdict_dist.split('\n')[1:]) + "\n")
         f.write("====================================\n")
-
-    print("Using verdict as label (aligned with SIM-RAG design)...")
 
     # Step 1: Split by claim_id (stratified by claim label) to prevent data leakage
     claim_info = df.groupby('claim_id')['label'].first()
@@ -38,20 +37,27 @@ def main(input_path, train_path, test_path, log_path, split=0.2):
     val_raw = df[df['claim_id'].isin(val_claim_ids)]
     print(f"Claim-level split: {len(train_claim_ids)} train claims, {len(val_claim_ids)} val claims")
 
-    # Step 2: Balance each split by verdict independently
-    def balance_by_verdict(split_df):
-        v0 = split_df[split_df['verdict'] == 0]
-        v1 = split_df[split_df['verdict'] == 1]
-        if len(v0) == 0 or len(v1) == 0:
-            print(f"Warning: Imbalanced - verdict=0: {len(v0)}, verdict=1: {len(v1)}")
-            return split_df
-        min_count = min(len(v0), len(v1))
-        v0 = v0.sample(n=min_count, random_state=42)
-        v1 = v1.sample(n=min_count, random_state=42)
-        return pd.concat([v0, v1]).sample(frac=1, random_state=42).reset_index(drop=True)
+    if mode == 'binary':
+        print("Using verdict as label (aligned with SIM-RAG design)...")
+        # Balance each split by verdict independently
+        def balance_by_verdict(split_df):
+            v0 = split_df[split_df['verdict'] == 0]
+            v1 = split_df[split_df['verdict'] == 1]
+            if len(v0) == 0 or len(v1) == 0:
+                print(f"Warning: Imbalanced - verdict=0: {len(v0)}, verdict=1: {len(v1)}")
+                return split_df
+            min_count = min(len(v0), len(v1))
+            v0 = v0.sample(n=min_count, random_state=42)
+            v1 = v1.sample(n=min_count, random_state=42)
+            return pd.concat([v0, v1]).sample(frac=1, random_state=42).reset_index(drop=True)
 
-    train_df = balance_by_verdict(train_raw)
-    dev_df = balance_by_verdict(val_raw)
+        train_df = balance_by_verdict(train_raw)
+        dev_df = balance_by_verdict(val_raw)
+    else:
+        # multihead: no verdict balancing needed (regression targets)
+        print("Using multi-head mode (r_stop + q targets, no verdict balancing)...")
+        train_df = train_raw.sample(frac=1, random_state=42).reset_index(drop=True)
+        dev_df = val_raw.sample(frac=1, random_state=42).reset_index(drop=True)
 
     # Print final distribution
     with open(log_path, "a") as f:
@@ -87,6 +93,8 @@ if __name__ == "__main__":
     parser.add_argument('--test_path', type=str, required=False, help='Path to the val dataset')
     parser.add_argument('--log_path', type=str, required=False, help='Path to the log file')
     parser.add_argument('--split', type=float, default=0.2, help='Proportion for val split (default 0.2)')
+    parser.add_argument('--mode', type=str, default='binary', choices=['binary', 'multihead'],
+                        help='binary: balance by verdict; multihead: simple claim-level split')
 
     args = parser.parse_args()
 
@@ -100,4 +108,4 @@ if __name__ == "__main__":
     if args.log_path is None:
         args.log_path = f'logs/{args.experiment_name}_log.txt'
 
-    main(args.input_path, args.train_path, args.test_path, args.log_path, args.split)
+    main(args.input_path, args.train_path, args.test_path, args.log_path, args.split, args.mode)

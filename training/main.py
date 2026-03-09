@@ -1,4 +1,4 @@
-"""SWIFT v5: Critic training with DeBERTa-v3 (binary classification)."""
+"""SWIFT v5: Critic training with DeBERTa-v3 (binary classification + multi-head)."""
 
 import argparse
 import os
@@ -6,11 +6,15 @@ import sys
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from training import config
-from training.data_processing import load_data, prepare_dataset, create_dataset_dict, tokenize_data
+from training.data_processing import (
+    load_data, prepare_dataset, prepare_dataset_v2,
+    create_dataset_dict, tokenize_data, tokenize_data_v2,
+)
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -42,6 +46,8 @@ def parse_args():
     parser.add_argument("--w_reject", type=float, default=1.5, help="Weight for reject class (0)")
     parser.add_argument("--w_accept", type=float, default=1.0, help="Weight for accept class (1)")
     parser.add_argument("--patience", type=int, default=3, help="Early stopping patience")
+    parser.add_argument("--model_type", type=str, default="binary", choices=["binary", "multihead"],
+                        help="binary: original 2-class critic; multihead: R+Q multi-head critic")
     return parser.parse_args()
 
 
@@ -67,6 +73,26 @@ class WeightedTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
+class MultiHeadTrainer(Trainer):
+    """Trainer for multi-head R+Q critic (recoverability learning)."""
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        r_targets = inputs.pop("r_stop")
+        q_targets = inputs.pop("q_targets")
+
+        outputs = model(**inputs)
+        logits = outputs.logits  # (batch, 4)
+
+        r_pred = torch.sigmoid(logits[:, 0])  # stop risk in [0,1]
+        q_pred = logits[:, 1:]                # (batch, 3) raw action values
+
+        loss_r = F.binary_cross_entropy(r_pred, r_targets.float())
+        loss_q = F.mse_loss(q_pred, q_targets.float())
+        loss = loss_r + loss_q
+
+        return (loss, outputs) if return_outputs else loss
+
+
 def compute_metrics(eval_prediction):
     predictions, labels = eval_prediction
     preds = np.argmax(predictions, axis=-1)
@@ -83,6 +109,22 @@ def compute_metrics(eval_prediction):
         'recall_accept': recall[1],
         'f1_reject': f1[0],
         'f1_accept': f1[1],
+    }
+
+
+def compute_metrics_multihead(eval_prediction):
+    """Metrics for multi-head model: threshold R at 0.5 for accuracy, report MAE for Q."""
+    predictions, labels = eval_prediction
+    # predictions shape: (N, 4), labels shape: (N,) — but labels are r_stop only for now
+    r_pred = 1.0 / (1.0 + np.exp(-predictions[:, 0]))  # sigmoid
+    r_binary = (r_pred >= 0.5).astype(int)
+
+    # labels come through as r_stop values (0 or 1)
+    r_labels = labels.astype(int) if labels.ndim == 1 else labels[:, 0].astype(int)
+
+    return {
+        'r_accuracy': accuracy_score(r_labels, r_binary),
+        'r_mae': float(np.mean(np.abs(r_pred - r_labels))),
     }
 
 
@@ -105,83 +147,126 @@ def main():
     if 'CUDA_VISIBLE_DEVICES' in os.environ:
         print(f"Visible CUDA Devices: {os.environ['CUDA_VISIBLE_DEVICES']}")
 
-    # Load and prepare data
-    raw_train, raw_val, raw_test = load_data(args.train_path, args.val_path)
-    train_set = prepare_dataset(raw_train)
-    val_set = prepare_dataset(raw_val)
-    dataset = create_dataset_dict(train_set, val_set, val_set)
+    # ===== Binary mode (original) =====
+    if args.model_type == "binary":
+        raw_train, raw_val, raw_test = load_data(args.train_path, args.val_path)
+        train_set = prepare_dataset(raw_train)
+        val_set = prepare_dataset(raw_val)
+        dataset = create_dataset_dict(train_set, val_set, val_set)
 
-    # Load model and tokenizer
-    print(f"Loading model from {args.model_path}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        args.model_path,
-        num_labels=2,
-        ignore_mismatched_sizes=True,  # Replace 3-class NLI head with 2-class
-    )
-    print(f"Model loaded: {model.config.model_type}, params={sum(p.numel() for p in model.parameters())/1e6:.1f}M")
-
-    # Tokenize data
-    tokenized = tokenize_data(dataset, tokenizer, args.max_length)
-
-    # Training arguments
-    training_args = TrainingArguments(
-        report_to=None,
-        output_dir=args.output_dir,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        num_train_epochs=args.num_train_epochs,
-        warmup_ratio=args.warmup_ratio,
-        logging_steps=config.LOGGING_STEPS,
-        eval_strategy=config.EVAL_STRATEGY,
-        save_strategy=config.SAVE_STRATEGY,
-        save_total_limit=config.SAVE_TOTAL_LIMIT,
-        fp16=args.fp16,
-        load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
-    )
-
-    # Create trainer
-    callbacks = [EarlyStoppingCallback(early_stopping_patience=args.patience)]
-
-    if args.weighted_training:
-        trainer = WeightedTrainer(
-            class_weights=[args.w_reject, args.w_accept],
-            model=model,
-            args=training_args,
-            train_dataset=tokenized["train"],
-            eval_dataset=tokenized["val"],
-            compute_metrics=compute_metrics,
-            callbacks=callbacks,
+        print(f"Loading model from {args.model_path}...")
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            args.model_path, num_labels=2, ignore_mismatched_sizes=True,
         )
-    else:
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=tokenized["train"],
-            eval_dataset=tokenized["val"],
-            compute_metrics=compute_metrics,
-            callbacks=callbacks,
+        print(f"Model loaded: {model.config.model_type}, params={sum(p.numel() for p in model.parameters())/1e6:.1f}M")
+
+        tokenized = tokenize_data(dataset, tokenizer, args.max_length)
+
+        training_args = TrainingArguments(
+            report_to=None, output_dir=args.output_dir,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            per_device_eval_batch_size=args.per_device_eval_batch_size,
+            learning_rate=args.learning_rate, weight_decay=args.weight_decay,
+            num_train_epochs=args.num_train_epochs, warmup_ratio=args.warmup_ratio,
+            logging_steps=config.LOGGING_STEPS, eval_strategy=config.EVAL_STRATEGY,
+            save_strategy=config.SAVE_STRATEGY, save_total_limit=config.SAVE_TOTAL_LIMIT,
+            fp16=args.fp16, load_best_model_at_end=True, metric_for_best_model="accuracy",
         )
 
-    if args.eval_only:
-        metrics = trainer.evaluate()
-        print(f"Evaluation metrics: {metrics}")
-    else:
-        trainer.train()
-        print("Evaluating Model:")
-        metrics = trainer.evaluate()
-        print(f"Evaluation metrics: {metrics}")
+        callbacks = [EarlyStoppingCallback(early_stopping_patience=args.patience)]
 
+        if args.weighted_training:
+            trainer = WeightedTrainer(
+                class_weights=[args.w_reject, args.w_accept],
+                model=model, args=training_args,
+                train_dataset=tokenized["train"], eval_dataset=tokenized["val"],
+                compute_metrics=compute_metrics, callbacks=callbacks,
+            )
+        else:
+            trainer = Trainer(
+                model=model, args=training_args,
+                train_dataset=tokenized["train"], eval_dataset=tokenized["val"],
+                compute_metrics=compute_metrics, callbacks=callbacks,
+            )
+
+        if args.eval_only:
+            metrics = trainer.evaluate()
+        else:
+            trainer.train()
+            print("Evaluating Model:")
+            metrics = trainer.evaluate()
+
+        print(f"Evaluation metrics: {metrics}")
         with open(args.log_path, 'a') as f:
             f.write(f"Critic Evaluation Metrics: {metrics}\n")
             f.write("========================================\n")
 
-        trainer.save_model(args.output_dir)
-        tokenizer.save_pretrained(args.output_dir)
-        print(f"Model saved to {args.output_dir}")
+        if not args.eval_only:
+            trainer.save_model(args.output_dir)
+            tokenizer.save_pretrained(args.output_dir)
+            print(f"Model saved to {args.output_dir}")
+
+    # ===== Multi-head mode (recoverability) =====
+    elif args.model_type == "multihead":
+        raw_train, raw_val, raw_test = load_data(args.train_path, args.val_path)
+        train_set = prepare_dataset_v2(raw_train)
+        val_set = prepare_dataset_v2(raw_val)
+        dataset = create_dataset_dict(train_set, val_set, val_set)
+
+        print(f"Loading model from {args.model_path} (multi-head, 4 outputs)...")
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            args.model_path,
+            num_labels=config.MULTIHEAD_NUM_LABELS,
+            ignore_mismatched_sizes=True,
+        )
+        print(f"Model loaded: {model.config.model_type}, params={sum(p.numel() for p in model.parameters())/1e6:.1f}M")
+
+        tokenized = tokenize_data_v2(dataset, tokenizer, args.max_length)
+
+        training_args = TrainingArguments(
+            report_to=None, output_dir=args.output_dir,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            per_device_eval_batch_size=args.per_device_eval_batch_size,
+            learning_rate=config.MULTIHEAD_LEARNING_RATE, weight_decay=args.weight_decay,
+            num_train_epochs=config.MULTIHEAD_NUM_EPOCHS, warmup_ratio=args.warmup_ratio,
+            logging_steps=config.LOGGING_STEPS, eval_strategy=config.EVAL_STRATEGY,
+            save_strategy=config.SAVE_STRATEGY, save_total_limit=config.SAVE_TOTAL_LIMIT,
+            fp16=args.fp16, load_best_model_at_end=True, metric_for_best_model="r_accuracy",
+            remove_unused_columns=False,  # keep r_stop, q_targets for MultiHeadTrainer
+        )
+
+        callbacks = [EarlyStoppingCallback(early_stopping_patience=args.patience)]
+
+        trainer = MultiHeadTrainer(
+            model=model, args=training_args,
+            train_dataset=tokenized["train"], eval_dataset=tokenized["val"],
+            compute_metrics=compute_metrics_multihead, callbacks=callbacks,
+        )
+        trainer.label_names = ["r_stop"]  # tell Trainer which column is labels for metrics
+
+        if args.eval_only:
+            metrics = trainer.evaluate()
+        else:
+            trainer.train()
+            print("Evaluating Model:")
+            metrics = trainer.evaluate()
+
+        print(f"Evaluation metrics: {metrics}")
+        with open(args.log_path, 'a') as f:
+            f.write(f"MultiHead Critic Metrics: {metrics}\n")
+            f.write("========================================\n")
+
+        if not args.eval_only:
+            trainer.save_model(args.output_dir)
+            tokenizer.save_pretrained(args.output_dir)
+            # Save a flag so inference knows this is a multi-head model
+            import json
+            meta = {"model_type": "multihead", "num_labels": config.MULTIHEAD_NUM_LABELS}
+            with open(os.path.join(args.output_dir, "swift_meta.json"), "w") as f:
+                json.dump(meta, f)
+            print(f"Multi-head model saved to {args.output_dir}")
 
 
 if __name__ == "__main__":

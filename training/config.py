@@ -19,3 +19,8 @@ EVAL_STRATEGY = "epoch"
 SAVE_STRATEGY = "epoch"
 SAVE_TOTAL_LIMIT = 2
 FP16 = True
+
+# Multi-head critic config (recoverability mode)
+MULTIHEAD_NUM_LABELS = 4   # 1 (R: stop risk) + 3 (Q: support/refute/resolve)
+MULTIHEAD_LEARNING_RATE = 2e-5
+MULTIHEAD_NUM_EPOCHS = 15

@@ -2,6 +2,7 @@
 
 Modes:
     --mode swift         SWIFT with trained DeBERTa Critic (default)
+    --mode swift_v2      Multi-head recoverability critic (R+G+Q)
     --mode nli_baseline  Off-the-shelf NLI model as Critic (no fine-tuning)
     --mode no_search     LLM only, no evidence retrieval
     --mode fixed_k       Fixed K search rounds, no Critic
@@ -25,7 +26,7 @@ from common.modeling import Model
 from common.shared_config import serper_api_key
 from search.query_serper import SerperAPI
 from search.query_ddg import DuckDuckGoSearch
-from generation.prompts import format_prompt
+from generation.prompts import format_prompt, format_intervention_prompt
 from generation.generation import extract_response, format_evidence, compute_verdict
 
 
@@ -146,9 +147,74 @@ Answer with ONLY a single digit: 1 (yes, accept) or 0 (no, need more evidence)."
         return "0"
 
 
+class RecoverabilityCritic:
+    """Multi-head DeBERTa critic: R (stop risk) + Q (action risk reduction).
+
+    Stopping rule: STOP if R <= alpha (safe) or G <= c (not recoverable).
+    Action selection: argmax Q when continuing.
+    """
+
+    ACTIONS = ['support', 'refute', 'resolve']
+
+    def __init__(self, model_path: str, alpha: float = 0.3, c: float = 0.1):
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
+        self.model.eval()
+        self.alpha = alpha
+        self.c = c
+
+    def predict(self, claim: str, knowledge: str, judgment: str, rationale: str) -> dict:
+        premise = (
+            f"Claim: {claim}\n"
+            f"Evidence:\n{knowledge}\n"
+            f"Rationale: {rationale}"
+        )
+        hypothesis = f"The judgment {judgment} is correct."
+
+        inputs = self.tokenizer(
+            premise, hypothesis,
+            return_tensors="pt",
+            max_length=512,
+            truncation="only_first",
+        ).to(self.device)
+
+        with torch.no_grad():
+            logits = self.model(**inputs).logits[0]  # (4,)
+
+        r = torch.sigmoid(logits[0]).item()
+        q_raw = logits[1:].cpu().numpy()
+        g = max(0.0, float(q_raw.max()))
+
+        best_action_idx = int(q_raw.argmax())
+        best_action = self.ACTIONS[best_action_idx]
+
+        should_stop = (r <= self.alpha) or (g <= self.c)
+
+        return {
+            'should_stop': should_stop,
+            'r': r,
+            'g': g,
+            'q': {a: float(q_raw[i]) for i, a in enumerate(self.ACTIONS)},
+            'best_action': best_action,
+        }
+
+
 # ============================================================
 # Inference Functions
 # ============================================================
+
+def generate_intervention_query_inference(
+    rater: Model, claim: str, knowledge: str,
+    judgment: str, rationale: str, action: str,
+) -> str:
+    """Generate a targeted intervention query during inference."""
+    prompt = format_intervention_prompt(claim, knowledge, judgment, rationale, action)
+    response, _ = rater.generate(prompt)
+    if response and response.strip():
+        return response.strip().strip('"').strip("'")
+    return claim
 
 def run_inference_single(
     claim: str,
@@ -235,6 +301,71 @@ def run_inference_single(
         }
 
     # === Modes with Critic: swift, nli_baseline, llm_critic ===
+    # === Mode: swift_v2 (recoverability critic with R/G/Q) ===
+    if mode == "swift_v2":
+        for step in range(max_steps):
+            # Step 1: LLM judgment
+            knowledge = format_evidence(evidence_list)
+            prompt = format_prompt(claim, knowledge)
+
+            judgment, rationale, search_query = '', '', ''
+            for retry in range(max_retries):
+                response, _ = rater.generate(prompt)
+                total_llm_calls += 1
+                judgment, rationale, search_query = extract_response(response)
+                if judgment:
+                    break
+                time.sleep(2)
+
+            if not judgment:
+                judgment = 'False'
+            final_judgment = judgment
+            final_rationale = rationale
+
+            # Step 2: Critic decision (after min_steps)
+            if step >= min_steps and critic is not None:
+                critic_result = critic.predict(claim, knowledge, final_judgment, final_rationale)
+                total_critic_calls += 1
+
+                if critic_result['should_stop']:
+                    stopped_at_step = step + 1
+                    break
+
+                # Step 3: Generate intervention query based on best_action
+                best_action = critic_result['best_action']
+                intervention_query = generate_intervention_query_inference(
+                    rater, claim, knowledge, final_judgment, final_rationale, best_action,
+                )
+                total_llm_calls += 1
+
+                try:
+                    search_result = searcher.run(intervention_query)
+                except Exception:
+                    search_result = "No search results available."
+                evidence_list.append({'query': intervention_query, 'result': search_result})
+                continue
+
+            # Before min_steps or no critic: use LLM's own search query
+            if not search_query:
+                search_query = claim
+            try:
+                search_result = searcher.run(search_query)
+            except Exception:
+                search_result = "No search results available."
+            evidence_list.append({'query': search_query, 'result': search_result})
+
+        if final_judgment is None:
+            final_judgment = 'False'
+        verdict = compute_verdict(final_judgment, label)
+        return {
+            'claim': claim, 'label': label,
+            'prediction': final_judgment, 'rationale': final_rationale,
+            'correct': verdict, 'stopped_at_step': stopped_at_step,
+            'total_steps': len(evidence_list), 'llm_calls': total_llm_calls,
+            'critic_calls': total_critic_calls,
+        }
+
+    # === Modes with original binary Critic: swift, nli_baseline, llm_critic ===
     for step in range(max_steps):
         # Step 1: Search (first step mandatory, or Critic said need more)
         if step == 0 or (step > 0 and evidence_needed):
@@ -337,6 +468,10 @@ def run_inference(
         assert critic_path, "Must provide --critic_path for swift mode"
         print(f"Loading DeBERTa Critic from {critic_path} (threshold={threshold})...")
         critic = DeBERTaCritic(critic_path, threshold=threshold)
+    elif mode == "swift_v2":
+        assert critic_path, "Must provide --critic_path for swift_v2 mode"
+        print(f"Loading RecoverabilityCritic from {critic_path} (alpha={threshold})...")
+        critic = RecoverabilityCritic(critic_path, alpha=threshold, c=0.1)
     elif mode == "nli_baseline":
         nli_path = nli_model_path or "models/deberta-v3-base-mnli"
         print(f"Loading off-the-shelf NLI Critic from {nli_path} (threshold={threshold})...")
@@ -429,7 +564,7 @@ def main():
     parser.add_argument('--input_path', type=str, default=config.TEST_CLAIMS_PATH)
     parser.add_argument('--output_path', type=str, default=None)
     parser.add_argument('--mode', type=str, default='swift',
-                        choices=['swift', 'nli_baseline', 'no_search', 'fixed_k', 'llm_critic'])
+                        choices=['swift', 'swift_v2', 'nli_baseline', 'no_search', 'fixed_k', 'llm_critic'])
     parser.add_argument('--critic_path', type=str, default=None)
     parser.add_argument('--nli_model_path', type=str, default=None)
     parser.add_argument('--max_steps', type=int, default=config.INFERENCE_MAX_STEPS)
